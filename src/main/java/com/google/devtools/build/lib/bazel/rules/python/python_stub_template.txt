@@ -438,6 +438,7 @@ def Main():
     python_path = python_path.replace('/', os.sep)
 
   new_env['PYTHONPATH'] = python_path
+  
   runfiles_envkey, runfiles_envvalue = RunfilesEnvvar(module_space)
   if runfiles_envkey:
     new_env[runfiles_envkey] = runfiles_envvalue
