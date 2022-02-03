@@ -310,6 +310,7 @@ def Main():
     python_path = python_path.replace('/', os.sep)
 
   new_env['PYTHONPATH'] = python_path
+  
   runfiles_envkey, runfiles_envvalue = RunfilesEnvvar(module_space)
   if runfiles_envkey:
     new_env[runfiles_envkey] = runfiles_envvalue
@@ -351,6 +352,24 @@ def Main():
     new_env['PYTHON_LCOV_FILE'] = os.environ.get('COVERAGE_DIR') + '/pylcov.dat'
   else:
     args = [python_program, main_filename] + args
+
+  import tempfile
+  import pathlib
+  user_base = (pathlib.Path(__file__).parent/'.tmp').resolve()
+  user_base.mkdir(parents=True, exist_ok=True)
+
+  pth_dir = user_base / 'lib'/'python3.9'/'site-packages'
+  pth_dir.mkdir(parents=True, exist_ok=True)
+
+  pth_file = str(pth_dir/'packages.pth')
+  path_list = new_env['PYTHONPATH'].split(os.pathsep)
+  with open(pth_file, 'w') as f:
+      for path in path_list:
+          path = path.replace("\\", "/").replace("/", os.path.sep)
+          f.write('{}\n'.format(path))
+  # clean PYTHONPATH and set site.PYTHONUSERBASE variable
+  del new_env['PYTHONPATH'] 
+  new_env['PYTHONUSERBASE'] = str(user_base)
 
   os.environ.update(new_env)
 
