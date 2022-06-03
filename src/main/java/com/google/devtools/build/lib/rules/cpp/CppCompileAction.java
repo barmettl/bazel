@@ -98,6 +98,7 @@ import com.google.devtools.build.lib.vfs.Symlinks;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
+import com.google.devtools.build.skyframe.SkyframeIterableResult;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -224,6 +225,7 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
    *     not needed during actual execution.
    * @param outputFile the object file that is written as result of the compilation
    * @param dotdFile the .d file that is generated as a side-effect of compilation
+   * @param diagnosticsFile the .dia file that is generated as a side-effect of compilation
    * @param gcnoFile the coverage notes that are written in coverage mode, can be null
    * @param dwoFile the .dwo output file where debug information is stored for Fission builds (null
    *     if Fission mode is disabled)
@@ -252,6 +254,7 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
       NestedSet<Artifact> additionalPrunableHeaders,
       Artifact outputFile,
       @Nullable Artifact dotdFile,
+      @Nullable Artifact diagnosticsFile,
       @Nullable Artifact gcnoFile,
       @Nullable Artifact dwoFile,
       @Nullable Artifact ltoIndexingFile,
@@ -271,7 +274,14 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
         NestedSetBuilder.fromNestedSet(mandatoryInputs)
             .addTransitive(inputsForInvalidation)
             .build(),
-        collectOutputs(outputFile, dotdFile, gcnoFile, dwoFile, ltoIndexingFile, additionalOutputs),
+        collectOutputs(
+            outputFile,
+            dotdFile,
+            diagnosticsFile,
+            gcnoFile,
+            dwoFile,
+            ltoIndexingFile,
+            additionalOutputs),
         env);
     Preconditions.checkNotNull(outputFile);
     this.outputFile = outputFile;
@@ -292,7 +302,13 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
         Preconditions.checkNotNull(additionalIncludeScanningRoots);
     this.compileCommandLine =
         buildCommandLine(
-            sourceFile, coptsFilter, actionName, dotdFile, featureConfiguration, variables);
+            sourceFile,
+            coptsFilter,
+            actionName,
+            dotdFile,
+            diagnosticsFile,
+            featureConfiguration,
+            variables);
     this.executionInfo = executionInfo;
     this.actionName = actionName;
     this.featureConfiguration = featureConfiguration;
@@ -316,6 +332,7 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
   private static ImmutableSet<Artifact> collectOutputs(
       @Nullable Artifact outputFile,
       @Nullable Artifact dotdFile,
+      @Nullable Artifact diagnosticsFile,
       @Nullable Artifact gcnoFile,
       @Nullable Artifact dwoFile,
       @Nullable Artifact ltoIndexingFile,
@@ -332,6 +349,9 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
     if (dotdFile != null) {
       outputs.add(dotdFile);
     }
+    if (diagnosticsFile != null) {
+      outputs.add(diagnosticsFile);
+    }
     if (dwoFile != null) {
       outputs.add(dwoFile);
     }
@@ -346,6 +366,7 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
       CoptsFilter coptsFilter,
       String actionName,
       Artifact dotdFile,
+      Artifact diagnosticsFile,
       FeatureConfiguration featureConfiguration,
       CcToolchainVariables variables) {
     return CompileCommandLine.builder(sourceFile, coptsFilter, actionName, dotdFile)
@@ -710,35 +731,6 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
     return getSystemIncludeDirs(getCompilerOptions());
   }
 
-  private static final ImmutableList<CharMatcher> MSVC_CHARS =
-      ImmutableList.of(
-          CharMatcher.anyOf("mM"),
-          CharMatcher.anyOf("sS"),
-          CharMatcher.anyOf("vV"),
-          CharMatcher.anyOf("cC"));
-  private static final ImmutableList<CharMatcher> INCLUDE_PREFIX_CHARS =
-      ImmutableList.of(CharMatcher.anyOf("-/"), CharMatcher.anyOf("iI"));
-
-  private static boolean substrMatchesChars(
-      String s, int startPos, ImmutableList<CharMatcher> substr) {
-    for (int i = 0; i < substr.size(); i++) {
-      if (!substr.get(i).matches(s.charAt(startPos + i))) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  private static boolean matchesCaseInsensitiveMsvc(String s) {
-    return s.length() >= 4 && substrMatchesChars(s, 0, MSVC_CHARS);
-  }
-
-  private static boolean matchesIncludeCaseInsensitiveMsvc(String s) {
-    return s.length() >= 6
-        && substrMatchesChars(s, 0, INCLUDE_PREFIX_CHARS)
-        && substrMatchesChars(s, 2, MSVC_CHARS);
-  }
-
   private List<PathFragment> getSystemIncludeDirs(List<String> compilerOptions) {
     // TODO(bazel-team): parsing the command line flags here couples us to gcc- and clang-cl-style
     // compiler command lines; use a different way to specify system includes (for example through a
@@ -770,6 +762,35 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
       }
     }
     return result.build();
+  }
+
+  private static final ImmutableList<CharMatcher> MSVC_CHARS =
+      ImmutableList.of(
+          CharMatcher.anyOf("mM"),
+          CharMatcher.anyOf("sS"),
+          CharMatcher.anyOf("vV"),
+          CharMatcher.anyOf("cC"));
+  private static final ImmutableList<CharMatcher> INCLUDE_PREFIX_CHARS =
+      ImmutableList.of(CharMatcher.anyOf("-/"), CharMatcher.anyOf("iI"));
+
+  private static boolean substrMatchesChars(
+      String s, int startPos, ImmutableList<CharMatcher> substr) {
+    for (int i = 0; i < substr.size(); i++) {
+      if (!substr.get(i).matches(s.charAt(startPos + i))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static boolean matchesCaseInsensitiveMsvc(String s) {
+    return s.length() >= 4 && substrMatchesChars(s, 0, MSVC_CHARS);
+  }
+
+  private static boolean matchesIncludeCaseInsensitiveMsvc(String s) {
+    return s.length() >= 6
+        && substrMatchesChars(s, 0, INCLUDE_PREFIX_CHARS)
+        && substrMatchesChars(s, 2, MSVC_CHARS);
   }
 
   private static ImmutableList<String> getCmdlineIncludes(List<String> args) {
@@ -859,6 +880,15 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
   @Override
   public List<String> getArguments() throws CommandLineExpansionException {
     return compileCommandLine.getArguments(paramFilePath, getOverwrittenVariables());
+  }
+
+  @Override
+  public Sequence<String> getStarlarkArgv() throws EvalException, InterruptedException {
+    try {
+      return StarlarkList.immutableCopyOf(getArguments());
+    } catch (CommandLineExpansionException ex) {
+      throw new EvalException(ex);
+    }
   }
 
   @Override
@@ -1799,13 +1829,16 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
   @Nullable
   private static ImmutableMap<Artifact, NestedSet<Artifact>> computeTransitivelyUsedModules(
       SkyFunction.Environment env, Set<DerivedArtifact> usedModules) throws InterruptedException {
-    // Because this env.getValues call does not specify any exceptions, it is impossible for input
-    // discovery to recover from exceptions thrown by spurious module deps (for instance, if a
-    // commented-out include references a header file with an error in it). However, we generally
-    // don't try to recover from errors around spurious includes discovered in the current build.
+    // Because SkyframeIterableResult.next call does not specify any exceptions where
+    // SkyframeIterableResult is returned by env.getOrderedValuesAndExceptions, it is
+    // impossible for input discovery to recover from exceptions thrown by spurious module deps (for
+    // instance, if a commented-out include references a header file with an error in it). However,
+    // we generally don't try to recover from errors around spurious includes discovered in the
+    // current build.
     // TODO(janakr): Can errors be aggregated here at least?
-    Map<SkyKey, SkyValue> actionExecutionValues =
-        env.getValues(Collections2.transform(usedModules, DerivedArtifact::getGeneratingActionKey));
+    Collection<SkyKey> skyKeys =
+        Collections2.transform(usedModules, DerivedArtifact::getGeneratingActionKey);
+    SkyframeIterableResult actionExecutionValues = env.getOrderedValuesAndExceptions(skyKeys);
     if (env.valuesMissing()) {
       return null;
     }
@@ -1814,10 +1847,12 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
     for (DerivedArtifact module : usedModules) {
       Preconditions.checkState(
           module.isFileType(CppFileTypes.CPP_MODULE), "Non-module? %s", module);
+      SkyValue skyValue = actionExecutionValues.next();
+      if (skyValue == null) {
+        return null;
+      }
       ActionExecutionValue value =
-          Preconditions.checkNotNull(
-              (ActionExecutionValue) actionExecutionValues.get(module.getGeneratingActionKey()),
-              module);
+          Preconditions.checkNotNull((ActionExecutionValue) skyValue, module);
       transitivelyUsedModules.put(module, value.getDiscoveredModules());
     }
     return transitivelyUsedModules.buildOrThrow();

@@ -20,6 +20,7 @@ load(":common/rule_util.bzl", "create_composite_dep", "merge_attrs")
 load(":common/java/android_lint.bzl", "android_lint_action")
 load(":common/java/compile_action.bzl", "COMPILE_ACTION", "COMPILE_ACTION_IMPLICIT_ATTRS", "compile_action")
 load(":common/java/java_semantics.bzl", "semantics")
+load(":common/java/proguard_validation.bzl", "VALIDATE_PROGUARD_SPECS_IMPLICIT_ATTRS", "validate_proguard_specs")
 
 java_common = _builtins.toplevel.java_common
 coverage_common = _builtins.toplevel.coverage_common
@@ -71,16 +72,16 @@ def basic_java_library(
         javacopts = [],
         neverlink = False,
         enable_compile_jar_action = True,
-        coverage_config = None):
+        coverage_config = None,
+        proguard_specs = None,
+        add_exports = [],
+        add_opens = []):
     """
     Creates actions that compile and lint Java sources, sets up coverage and returns JavaInfo, InstrumentedFilesInfo and output groups.
 
     The call creates actions and providers needed and shared by `java_library`,
     `java_plugin`,`java_binary`, and `java_test` rules and it is primarily
     intended to be used in those rules.
-
-    To prepare arguments for this call from rule's attributes use the provided
-    helpers: `collect_deps`, `collect_plugins`, and `collect_resources`.
 
     Before compilation coverage.runner is added to the dependencies and if
     present plugins are extended with the value of `--plugin` flag.
@@ -102,14 +103,15 @@ def basic_java_library(
       coverage_config: (struct{runner:Target, support_files:list[File]|depset[File], env:dict[str,str]})
         Coverage configuration. `runner` is added to dependencies during
         compilation, `support_files` and `env` is returned in InstrumentedFilesInfo.
-
+      proguard_specs: (list[File]) Files to be used as Proguard specification.
+        Proguard validation is done only when the parameter is set.
+      add_exports: (list[str]) Allow this library to access the given <module>/<package>.
+      add_opens: (list[str]) Allow this library to reflectively access the given <module>/<package>.
     Returns:
-      ({java_info: JavaInfo,
-        files_to_build: list[File],
-        has_sources_or_resources: bool,
-        instrumented_files_info: InstrumentedFilesInfo,
-        output_groups: dict[str,list[File]],
-        extra_providers: list[Provider]})
+      (dict[str, Provider],
+        {files_to_build: list[File],
+         runfiles: list[File],
+         output_groups: dict[str,list[File]]})
     """
     source_files = _filter_srcs(srcs, "java")
     source_jars = _filter_srcs(srcs, "srcjar")
@@ -140,18 +142,18 @@ def basic_java_library(
         neverlink,
         ctx.fragments.java.strict_java_deps,
         enable_compile_jar_action,
+        add_exports = add_exports,
+        add_opens = add_opens,
     )
+    target = {"JavaInfo": java_info}
 
     output_groups = dict(
-        compilation_outputs = compilation_info.output_class_jars,
+        compilation_outputs = compilation_info.files_to_build,
         _source_jars = java_info.transitive_source_jars,
         _direct_source_jars = java_info.source_jars,
     )
 
-    # TODO(b/131760365): This is a hack, since the Starlark APIs don't have
-    # an explicit test for "host" or "tool" configuration.
-    if not (ctx.configuration == ctx.host_configuration or
-            ctx.bin_dir.path.find("-exec-") >= 0) and not neverlink:
+    if ctx.fragments.java.run_android_lint:
         generated_source_jars = [
             output.generated_source_jar
             for output in java_info.java_outputs
@@ -166,7 +168,7 @@ def basic_java_library(
         if lint_output:
             output_groups["_validation"] = [lint_output]
 
-    instrumented_files_info = coverage_common.instrumented_files_info(
+    target["InstrumentedFilesInfo"] = coverage_common.instrumented_files_info(
         ctx,
         source_attributes = ["srcs"],
         dependency_attributes = ["deps", "data", "resources", "resource_jars", "exports", "runtime_deps", "jars"],
@@ -174,13 +176,18 @@ def basic_java_library(
         coverage_environment = coverage_config.env if coverage_config else {},
     )
 
-    return struct(
-        java_info = java_info,
-        files_to_build = compilation_info.output_class_jars,
-        has_sources_or_resources = source_files or source_jars or resources,
-        instrumented_files_info = instrumented_files_info,
+    if proguard_specs != None:
+        target["ProguardSpecProvider"] = validate_proguard_specs(
+            ctx,
+            proguard_specs,
+            [deps, runtime_deps, exports, plugins, exported_plugins],
+        )
+        output_groups["_hidden_top_level_INTERNAL_"] = target["ProguardSpecProvider"].specs
+
+    return target, struct(
+        files_to_build = compilation_info.files_to_build,
+        runfiles = compilation_info.runfiles,
         output_groups = output_groups,
-        extra_providers = {},
     )
 
 def _collect_plugins(plugins):
@@ -225,28 +232,26 @@ def _collect_native_libraries(*attrs):
     """
     return _filter_provider(CcInfo, *attrs)
 
-def construct_defaultinfo(ctx, files, neverlink, has_sources_or_resources, *extra_attrs):
+def construct_defaultinfo(ctx, files_to_build, files, neverlink, *extra_attrs):
     """Constructs DefaultInfo for Java library like rule.
 
     Args:
       ctx: (RuleContext) Used to construct the runfiles.
-      files: (list[File]) List of the files built by the rule.
+      files_to_build: (list[File]) List of the files built by the rule.
+      files: (list[File]) List of the files include in runfiles.
       neverlink: (bool) When true empty runfiles are constructed.
-      has_sources_or_resources: (bool) TODO(b/213551463): Check if this can be removed.
       *extra_attrs: (list[Target]) Extra attributes to merge runfiles from.
 
     Returns:
       (DefaultInfo) DefaultInfo provider.
     """
-    files_depset = depset(files)
     if neverlink:
         runfiles = None
     else:
-        run_files = files_depset if has_sources_or_resources else None
-        runfiles = ctx.runfiles(transitive_files = run_files, collect_default = True)
+        runfiles = ctx.runfiles(files = files, collect_default = True)
         runfiles = runfiles.merge_all([dep[DefaultInfo].default_runfiles for attr in extra_attrs for dep in attr])
     default_info = DefaultInfo(
-        files = files_depset,
+        files = depset(files_to_build),
         runfiles = runfiles,
     )
     return default_info
@@ -259,6 +264,11 @@ BASIC_JAVA_LIBRARY_IMPLICIT_ATTRS = merge_attrs(
             providers = [JavaPluginInfo],
         ),
     },
+)
+
+BASIC_JAVA_LIBRARY_WITH_PROGUARD_IMPLICIT_ATTRS = merge_attrs(
+    BASIC_JAVA_LIBRARY_IMPLICIT_ATTRS,
+    VALIDATE_PROGUARD_SPECS_IMPLICIT_ATTRS,
 )
 
 # TODO(b/213551463) remove once unused

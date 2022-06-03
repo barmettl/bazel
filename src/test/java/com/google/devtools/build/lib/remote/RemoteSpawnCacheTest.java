@@ -14,11 +14,13 @@
 package com.google.devtools.build.lib.remote;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.util.concurrent.Futures.immediateVoidFuture;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
@@ -34,6 +36,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.eventbus.EventBus;
+import com.google.common.util.concurrent.ListenableFuture;
 import com.google.devtools.build.lib.actions.ActionContext;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionInputHelper;
@@ -61,7 +64,6 @@ import com.google.devtools.build.lib.exec.SpawnInputExpander;
 import com.google.devtools.build.lib.exec.SpawnRunner.ProgressStatus;
 import com.google.devtools.build.lib.exec.SpawnRunner.SpawnExecutionContext;
 import com.google.devtools.build.lib.exec.util.FakeOwner;
-import com.google.devtools.build.lib.remote.RemoteExecutionService.RemoteAction;
 import com.google.devtools.build.lib.remote.RemoteExecutionService.RemoteActionResult;
 import com.google.devtools.build.lib.remote.common.CacheNotFoundException;
 import com.google.devtools.build.lib.remote.common.RemoteActionExecutionContext;
@@ -86,11 +88,13 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.SortedMap;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.mockito.invocation.InvocationOnMock;
@@ -127,7 +131,9 @@ public class RemoteSpawnCacheTest {
         }
 
         @Override
-        public void prefetchInputs() {}
+        public ListenableFuture<Void> prefetchInputs() {
+          return immediateVoidFuture();
+        }
 
         @Override
         public void lockOutputFiles(int exitCode, String errorMessage, FileOutErr outErr) {}
@@ -259,10 +265,11 @@ public class RemoteSpawnCacheTest {
     // arrange
     RemoteSpawnCache cache = createRemoteSpawnCache();
     RemoteExecutionService service = cache.getRemoteExecutionService();
+    ArgumentCaptor<ActionKey> actionKeyCaptor = ArgumentCaptor.forClass(ActionKey.class);
     ActionResult actionResult = ActionResult.getDefaultInstance();
     when(remoteCache.downloadActionResult(
             any(RemoteActionExecutionContext.class),
-            any(ActionKey.class),
+            actionKeyCaptor.capture(),
             /* inlineOutErr= */ eq(false)))
         .thenAnswer(
             new Answer<CachedActionResult>() {
@@ -300,6 +307,12 @@ public class RemoteSpawnCacheTest {
         .downloadOutputs(
             any(), eq(RemoteActionResult.createFromCache(CachedActionResult.remote(actionResult))));
     verify(service, never()).uploadOutputs(any(), any());
+    assertThat(result.getDigest())
+        .isEqualTo(
+            Optional.of(
+                SpawnResult.Digest.of(
+                    actionKeyCaptor.getValue().getDigest().getHash(),
+                    actionKeyCaptor.getValue().getDigest().getSizeBytes())));
     assertThat(result.setupSuccess()).isTrue();
     assertThat(result.exitCode()).isEqualTo(0);
     assertThat(result.isCacheHit()).isTrue();
@@ -598,6 +611,7 @@ public class RemoteSpawnCacheTest {
     when(remoteCache.downloadActionResult(
             any(RemoteActionExecutionContext.class), any(), /* inlineOutErr= */ eq(false)))
         .thenReturn(CachedActionResult.remote(success));
+    doReturn(null).when(cache.getRemoteExecutionService()).downloadOutputs(any(), any());
 
     // act
     CacheHandle cacheHandle = cache.lookup(simpleSpawn, simplePolicy);

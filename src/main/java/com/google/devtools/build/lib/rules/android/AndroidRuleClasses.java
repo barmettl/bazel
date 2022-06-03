@@ -315,7 +315,7 @@ public final class AndroidRuleClasses {
           <code>res</code> directory.
           <br/>
           Generated files (from genrules) can be referenced by
-          <a href="../build-ref.html#labels">Label</a> here as well. The only restriction is that
+          <a href="${link build-ref#labels}">Label</a> here as well. The only restriction is that
           the generated outputs must be under the same "<code>res</code>" directory as any other
           resource files that are included.
           <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
@@ -571,6 +571,15 @@ public final class AndroidRuleClasses {
           <code>en_XA</code> and/or <code>ar_XB</code> pseudo-locales.
           <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
           .add(attr(ResourceFilterFactory.RESOURCE_CONFIGURATION_FILTERS_NAME, STRING_LIST))
+          /* <!-- #BLAZE_RULE($android_binary_base).ATTRIBUTE(min_sdk_version) -->
+          The minSdkVersion. This must match the minSdkVersion specified in the AndroidManifest.xml.
+          If set, will be used for dex/desugaring.
+          <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
+          .add(
+              attr("min_sdk_version", INTEGER)
+                  .undocumented("experimental")
+                  .value(StarlarkInt.of(0))
+                  .nonconfigurable("AspectParameters don't support configurations."))
           /* <!-- #BLAZE_RULE($android_binary_base).ATTRIBUTE(shrink_resources) -->
           Whether to perform resource shrinking. Resources that are not used by the binary will be
           removed from the APK. This is only supported for rules using local resources (i.e. the
@@ -591,7 +600,7 @@ public final class AndroidRuleClasses {
             <li><code>shrink_resources = 1</code>: Turns on Android resource shrinking</li>
             <li><code>shrink_resources = 0</code>: Turns off Android resource shrinking</li>
             <li><code>shrink_resources = -1</code>: Shrinking is controlled by the
-                <a href="../user-manual.html#flag--android_resource_shrinking">
+                <a href="${link user-manual#flag--android_resource_shrinking}">
                 --android_resource_shrinking</a> flag.</li>
           </ul>
           <!-- #END_BLAZE_RULE.ATTRIBUTE --> */

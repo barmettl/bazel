@@ -345,15 +345,14 @@ public class AppleCommandLineOptions extends FragmentOptions {
   public List<String> catalystCpus;
 
   @Option(
-    name = "xcode_version_config",
-    defaultValue = "@local_config_xcode//:host_xcodes",
-    converter = LabelConverter.class,
-    documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
-    effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.LOADING_AND_ANALYSIS},
-    help =
-        "The label of the xcode_config rule to be used for selecting the Xcode version "
-            + "in the build configuration."
-  )
+      name = "xcode_version_config",
+      defaultValue = "@bazel_tools//tools/cpp:host_xcodes",
+      converter = LabelConverter.class,
+      documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
+      effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.LOADING_AND_ANALYSIS},
+      help =
+          "The label of the xcode_config rule to be used for selecting the Xcode version "
+              + "in the build configuration.")
   public Label xcodeVersionConfig;
 
   @Option(
@@ -520,6 +519,9 @@ public class AppleCommandLineOptions extends FragmentOptions {
     host.appleCrosstoolTop = appleCrosstoolTop;
     host.applePlatforms = applePlatforms;
     host.incompatibleUseToolchainResolution = incompatibleUseToolchainResolution;
+
+    // Save host option for further use.
+    host.hostMacosMinimumOs = hostMacosMinimumOs;
 
     return host;
   }

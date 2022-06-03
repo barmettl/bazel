@@ -20,12 +20,8 @@ import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
 import com.google.devtools.build.skyframe.SkyframeIterableResult;
-import com.google.devtools.build.skyframe.ValueOrException;
-import com.google.devtools.build.skyframe.ValueOrException2;
-import com.google.devtools.build.skyframe.ValueOrException3;
+import com.google.devtools.build.skyframe.SkyframeLookupResult;
 import com.google.devtools.build.skyframe.Version;
-import java.util.List;
-import java.util.Map;
 import java.util.function.Supplier;
 import javax.annotation.Nullable;
 
@@ -99,77 +95,20 @@ final class ProgressEventSuppressingEnvironment implements SkyFunction.Environme
   }
 
   @Override
-  public Map<SkyKey, SkyValue> getValues(Iterable<? extends SkyKey> depKeys)
-      throws InterruptedException {
-    return delegate.getValues(depKeys);
-  }
-
-  @Override
-  public <E extends Exception> Map<SkyKey, ValueOrException<E>> getValuesOrThrow(
-      Iterable<? extends SkyKey> depKeys, Class<E> exceptionClass) throws InterruptedException {
-    return delegate.getValuesOrThrow(depKeys, exceptionClass);
-  }
-
-  @Override
-  public <E1 extends Exception, E2 extends Exception>
-      Map<SkyKey, ValueOrException2<E1, E2>> getValuesOrThrow(
-          Iterable<? extends SkyKey> depKeys, Class<E1> exceptionClass1, Class<E2> exceptionClass2)
-          throws InterruptedException {
-    return delegate.getValuesOrThrow(depKeys, exceptionClass1, exceptionClass2);
-  }
-
-  @Override
-  public <E1 extends Exception, E2 extends Exception, E3 extends Exception>
-      Map<SkyKey, ValueOrException3<E1, E2, E3>> getValuesOrThrow(
-          Iterable<? extends SkyKey> depKeys,
-          Class<E1> exceptionClass1,
-          Class<E2> exceptionClass2,
-          Class<E3> exceptionClass3)
-          throws InterruptedException {
-    return delegate.getValuesOrThrow(depKeys, exceptionClass1, exceptionClass2, exceptionClass3);
-  }
-
-  @Override
   public boolean valuesMissing() {
     return delegate.valuesMissing();
   }
 
   @Override
-  public List<SkyValue> getOrderedValues(Iterable<? extends SkyKey> depKeys)
+  public SkyframeLookupResult getValuesAndExceptions(Iterable<? extends SkyKey> depKeys)
       throws InterruptedException {
-    return delegate.getOrderedValues(depKeys);
+    return delegate.getValuesAndExceptions(depKeys);
   }
 
   @Override
   public SkyframeIterableResult getOrderedValuesAndExceptions(Iterable<? extends SkyKey> depKeys)
       throws InterruptedException {
     return delegate.getOrderedValuesAndExceptions(depKeys);
-  }
-
-  @Override
-  public <E extends Exception> List<ValueOrException<E>> getOrderedValuesOrThrow(
-      Iterable<? extends SkyKey> depKeys, Class<E> exceptionClass) throws InterruptedException {
-    return delegate.getOrderedValuesOrThrow(depKeys, exceptionClass);
-  }
-
-  @Override
-  public <E1 extends Exception, E2 extends Exception>
-      List<ValueOrException2<E1, E2>> getOrderedValuesOrThrow(
-          Iterable<? extends SkyKey> depKeys, Class<E1> exceptionClass1, Class<E2> exceptionClass2)
-          throws InterruptedException {
-    return delegate.getOrderedValuesOrThrow(depKeys, exceptionClass1, exceptionClass2);
-  }
-
-  @Override
-  public <E1 extends Exception, E2 extends Exception, E3 extends Exception>
-      List<ValueOrException3<E1, E2, E3>> getOrderedValuesOrThrow(
-          Iterable<? extends SkyKey> depKeys,
-          Class<E1> exceptionClass1,
-          Class<E2> exceptionClass2,
-          Class<E3> exceptionClass3)
-          throws InterruptedException {
-    return delegate.getOrderedValuesOrThrow(
-        depKeys, exceptionClass1, exceptionClass2, exceptionClass3);
   }
 
   @Override
@@ -206,5 +145,11 @@ final class ProgressEventSuppressingEnvironment implements SkyFunction.Environme
   @Override
   public <T extends SkyKeyComputeState> T getState(Supplier<T> stateSupplier) {
     return delegate.getState(stateSupplier);
+  }
+
+  @Override
+  @Nullable
+  public Version getMaxTransitiveSourceVersionSoFar() {
+    return delegate.getMaxTransitiveSourceVersionSoFar();
   }
 }

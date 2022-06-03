@@ -51,6 +51,7 @@ import com.google.devtools.build.lib.util.StringUtilities;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import com.google.devtools.build.lib.vfs.SyscallCache;
 import com.google.devtools.build.skyframe.SkyFunction.Environment;
 import com.google.devtools.build.skyframe.SkyFunctionException.Transience;
 import java.io.IOException;
@@ -101,8 +102,10 @@ public class StarlarkRepositoryContext extends StarlarkBaseExternalContext {
 
   private final Rule rule;
   private final PathPackageLocator packageLocator;
+  private final Path workspaceRoot;
   private final StructImpl attrObject;
   private final ImmutableSet<PathFragment> ignoredPatterns;
+  private final SyscallCache syscallCache;
 
   /**
    * Create a new context (repository_ctx) object for a Starlark repository rule ({@code rule}
@@ -119,7 +122,9 @@ public class StarlarkRepositoryContext extends StarlarkBaseExternalContext {
       double timeoutScaling,
       @Nullable ProcessWrapper processWrapper,
       StarlarkSemantics starlarkSemantics,
-      @Nullable RepositoryRemoteExecutor remoteExecutor)
+      @Nullable RepositoryRemoteExecutor remoteExecutor,
+      SyscallCache syscallCache,
+      Path workspaceRoot)
       throws EvalException {
     super(
         outputDirectory,
@@ -133,6 +138,8 @@ public class StarlarkRepositoryContext extends StarlarkBaseExternalContext {
     this.rule = rule;
     this.packageLocator = packageLocator;
     this.ignoredPatterns = ignoredPatterns;
+    this.syscallCache = syscallCache;
+    this.workspaceRoot = workspaceRoot;
     WorkspaceAttributeMapper attrs = WorkspaceAttributeMapper.of(rule);
     ImmutableMap.Builder<String, Object> attrBuilder = new ImmutableMap.Builder<>();
     for (String name : attrs.getAttributeNames()) {
@@ -159,6 +166,14 @@ public class StarlarkRepositoryContext extends StarlarkBaseExternalContext {
   }
 
   @StarlarkMethod(
+      name = "workspace_root",
+      structField = true,
+      doc = "The path to the root workspace of the bazel invocation.")
+  public StarlarkPath getWorkspaceRoot() {
+    return new StarlarkPath(workspaceRoot);
+  }
+
+  @StarlarkMethod(
       name = "attr",
       structField = true,
       doc =
@@ -176,7 +191,7 @@ public class StarlarkRepositoryContext extends StarlarkBaseExternalContext {
         || path.startsWith(workingDirectory)) {
       return starlarkPath;
     }
-    Path workspaceRoot = packageLocator.getWorkspaceFile().getParentDirectory();
+    Path workspaceRoot = packageLocator.getWorkspaceFile(syscallCache).getParentDirectory();
     PathFragment relativePath = path.relativeTo(workspaceRoot);
     for (PathFragment ignoredPattern : ignoredPatterns) {
       if (relativePath.startsWith(ignoredPattern)) {
@@ -821,7 +836,8 @@ public class StarlarkRepositoryContext extends StarlarkBaseExternalContext {
                     + " By default, the archive type is determined from the file extension of"
                     + " the URL."
                     + " If the file has no extension, you can explicitly specify either \"zip\","
-                    + " \"jar\", \"war\", \"aar\", \"tar.gz\", \"tgz\", \"tar.bz2\", or \"tar.xz\""
+                    + " \"jar\", \"war\", \"aar\", \"tar\", \"tar.gz\", \"tgz\", \"tar.xz\","
+                    + " \"txz\", \".tar.zst\", \".tzst\", \"tar.bz2\", \".ar\", or \".deb\""
                     + " here."),
         @Param(
             name = "stripPrefix",

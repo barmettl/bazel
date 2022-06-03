@@ -59,7 +59,9 @@ def compile_action(
         javacopts = [],
         neverlink = False,
         strict_deps = "ERROR",
-        enable_compile_jar_action = True):
+        enable_compile_jar_action = True,
+        add_exports = [],
+        add_opens = []):
     """
     Creates actions that compile Java sources, produce source jar, and produce header jar and returns JavaInfo.
 
@@ -111,19 +113,25 @@ def compile_action(
         compilation and not at runtime.
       strict_deps: (str) A string that specifies how to handle strict deps.
         Possible values: 'OFF', 'ERROR', 'WARN' and 'DEFAULT'. For more details
-        see https://docs.bazel.build/versions/main/bazel-user-manual.html#flag--strict_java_deps.
+        see https://bazel.build/docs/user-manual#strict-java-deps.
         By default 'ERROR'.
       enable_compile_jar_action: (bool) Enables header compilation or ijar
         creation. If set to False, it forces use of the full class jar in the
         compilation classpaths of any dependants. Doing so is intended for use
         by non-library targets such as binaries that do not have dependants.
+      add_exports: (list[str]) Allow this library to access the given <module>/<package>.
+      add_opens: (list[str]) Allow this library to reflectively access the given <module>/<package>.
 
     Returns:
-      ((JavaInfo, {output_class_jars: list[File],
+      ((JavaInfo, {files_to_build: list[File],
+                   runfiles: list[File],
                    compilation_classpath: list[File],
                    plugins: {processor_jars,
-                             processor_data: depset[File]}})
+                             processor_data: depset[File]}}))
       A tuple with JavaInfo provider and additional compilation info.
+
+      Files_to_build may include an empty .jar file when there are no sources
+      or resources present, whereas runfiles in this case are empty.
     """
 
     java_info = java_common.compile(
@@ -145,13 +153,13 @@ def compile_action(
         output_source_jar = output_source_jar,
         strict_deps = _filter_strict_deps(strict_deps),
         enable_compile_jar_action = enable_compile_jar_action,
+        add_exports = add_exports,
+        add_opens = add_opens,
     )
 
-    # TODO(b/213551463): Can `output_class_jars = [output_class_jar]` be used here, if not document.
-    output_class_jars = [out.class_jar for out in java_info.java_outputs]
-
     compilation_info = struct(
-        output_class_jars = output_class_jars,
+        files_to_build = [output_class_jar],
+        runfiles = [output_class_jar] if source_files or source_jars or resources else [],
         # TODO(ilist): collect compile_jars from JavaInfo in deps & exports
         compilation_classpath = java_info.compilation_info.compilation_classpath,
         javac_options = java_info.compilation_info.javac_options,
@@ -213,6 +221,8 @@ COMPILE_ACTION = create_dep(
         ),
         "javacopts": attr.string_list(),
         "neverlink": attr.bool(),
+        "add_exports": attr.string_list(),
+        "add_opens": attr.string_list(),
         "_java_toolchain": attr.label(
             default = semantics.JAVA_TOOLCHAIN_LABEL,
             providers = [java_common.JavaToolchainInfo],

@@ -33,41 +33,29 @@ import javax.annotation.Nullable;
 public final class RepositoryName {
 
   @SerializationConstant
-  public static final RepositoryName BAZEL_TOOLS = new RepositoryName("@bazel_tools");
+  public static final RepositoryName BAZEL_TOOLS = new RepositoryName("bazel_tools");
 
-  @SerializationConstant
-  public static final RepositoryName LOCAL_CONFIG_PLATFORM =
-      new RepositoryName("@local_config_platform");
+  @SerializationConstant public static final RepositoryName MAIN = new RepositoryName("");
 
-  @SerializationConstant public static final RepositoryName MAIN = new RepositoryName("@");
-
-  private static final Pattern VALID_REPO_NAME = Pattern.compile("@[\\w\\-.]*");
+  private static final Pattern VALID_REPO_NAME = Pattern.compile("[\\w\\-.]*");
 
   private static final LoadingCache<String, RepositoryName> repositoryNameCache =
       Caffeine.newBuilder()
           .weakValues()
           .build(
               name -> {
-                String errorMessage = validate(name);
-                if (errorMessage != null) {
-                  errorMessage =
-                      "invalid repository name '"
-                          + StringUtilities.sanitizeControlChars(name)
-                          + "': "
-                          + errorMessage;
-                  throw new LabelSyntaxException(errorMessage);
-                }
+                validate(name);
                 return new RepositoryName(StringCanonicalizer.intern(name));
               });
 
   /**
-   * Makes sure that name is a valid repository name and creates a new RepositoryName using it.
+   * Makes sure that name is a valid repository name and creates a new RepositoryName using it. The
+   * given string must not begin with a '@'.
    *
    * @throws LabelSyntaxException if the name is invalid
    */
   public static RepositoryName create(String name) throws LabelSyntaxException {
-    // TODO(b/200024947): Get rid of the '@'.
-    if (name.isEmpty() || name.equals("@")) {
+    if (name.isEmpty()) {
       return MAIN;
     }
     try {
@@ -79,17 +67,17 @@ public final class RepositoryName {
   }
 
   /**
-   * Creates a RepositoryName from a known-valid string (not @-prefixed). Generally this is a
-   * directory that has been created via getSourceRoot() or getPathUnderExecRoot().
+   * Creates a RepositoryName from a known-valid string. The given string must not begin with a '@'.
    */
-  public static RepositoryName createFromValidStrippedName(String name) {
+  public static RepositoryName createUnvalidated(String name) {
+    Preconditions.checkArgument(!name.startsWith("@"), "Do not prefix @ to repo names!");
     if (name.isEmpty()) {
       // NOTE(wyv): Without this `if` clause, a lot of Google-internal integration tests would start
       //   failing. This suggests to me that something is comparing RepositoryName objects using
       //   reference equality instead of #equals().
       return MAIN;
     }
-    return repositoryNameCache.get("@" + name);
+    return repositoryNameCache.get(name);
   }
 
   /**
@@ -115,7 +103,7 @@ public final class RepositoryName {
     }
 
     try {
-      RepositoryName repoName = RepositoryName.create("@" + path.getSegment(1));
+      RepositoryName repoName = create(path.getSegment(1));
       PathFragment subPath = path.subFragment(2);
       return Pair.of(repoName, subPath);
     } catch (LabelSyntaxException e) {
@@ -128,7 +116,7 @@ public final class RepositoryName {
   /**
    * Store the name if the owner repository where this repository name is requested. If this field
    * is not null, it means this instance represents the requested repository name that is actually
-   * not visible from the owner repository and should fail in {@link RepositoryDelegatorFunction}
+   * not visible from the owner repository and should fail in {@code RepositoryDelegatorFunction}
    * when fetching the repository.
    */
   private final String ownerRepoIfNotVisible;
@@ -142,44 +130,37 @@ public final class RepositoryName {
     this(name, null);
   }
 
-  /** Performs validity checking. Returns null on success, an error message otherwise. */
-  static String validate(String name) {
-    if (name.isEmpty() || name.equals("@")) {
-      return null;
+  /**
+   * Performs validity checking, throwing an exception if the given name is invalid. The exception
+   * message is sanitized.
+   */
+  static void validate(String name) throws LabelSyntaxException {
+    if (name.isEmpty()) {
+      return;
     }
 
     // Some special cases for more user-friendly error messages.
-    if (!name.startsWith("@")) {
-      return "workspace names must start with '@'";
-    }
-    if (name.equals("@.")) {
-      return "workspace names are not allowed to be '@.'";
-    }
-    if (name.equals("@..")) {
-      return "workspace names are not allowed to be '@..'";
+    if (name.equals(".") || name.equals("..")) {
+      throw LabelParser.syntaxErrorf(
+          "invalid repository name '@%s': repo names are not allowed to be '@%s'", name, name);
     }
 
     if (!VALID_REPO_NAME.matcher(name).matches()) {
-      return "workspace names may contain only A-Z, a-z, 0-9, '-', '_' and '.'";
+      throw LabelParser.syntaxErrorf(
+          "invalid repository name '@%s': repo names may contain only A-Z, a-z, 0-9, '-', '_' and"
+              + " '.'",
+          StringUtilities.sanitizeControlChars(name));
     }
-
-    return null;
   }
 
-  /**
-   * Returns the repository name without the leading "{@literal @}".  For the default repository,
-   * returns "".
-   */
-  public String strippedName() {
-    if (name.isEmpty()) {
-      return name;
-    }
-    return name.substring(1);
+  /** Returns the bare repository name without the leading "{@literal @}". */
+  public String getName() {
+    return name;
   }
 
   /**
    * Create a {@link RepositoryName} instance that indicates the requested repository name is
-   * actually not visible from the owner repository and should fail in {@link
+   * actually not visible from the owner repository and should fail in {@code
    * RepositoryDelegatorFunction} when fetching with this {@link RepositoryName} instance.
    */
   public RepositoryName toNonVisible(String ownerRepo) {
@@ -196,43 +177,23 @@ public final class RepositoryName {
     return ownerRepoIfNotVisible;
   }
 
-  /**
-   * Returns the repository name without the leading "{@literal @}". For the default repository,
-   * returns "".
-   */
-  public static String stripName(String repoName) {
-    return repoName.startsWith("@") ? repoName.substring(1) : repoName;
-  }
-
-  /**
-   * Returns if this is the default repository, that is, {@link #name} is "".
-   */
-  public boolean isDefault() {
+  /** Returns if this is the main repository, that is, {@link #getName} is empty. */
+  public boolean isMain() {
     return name.isEmpty();
   }
 
-  /**
-   * Returns if this is the main repository, that is, {@link #name} is "@".
-   */
-  public boolean isMain() {
-    return name.equals("@");
+  /** Returns the repository name, with leading "{@literal @}". */
+  public String getNameWithAt() {
+    return '@' + name;
   }
 
   /**
-   * Returns the repository name, with leading "{@literal @}" (or "" for the default repository).
-   */
-  // TODO(bazel-team): Use this over toString()- easier to track its usage.
-  public String getName() {
-    return name;
-  }
-
-  /**
-   * Returns the repository name, except that the main repo is conflated with the default repo
-   * ({@code "@"} becomes the empty string).
+   * Returns the repository name with leading "{@literal @}" except for the main repo, which is just
+   * the empty string.
    */
   // TODO(bazel-team): Consider renaming to "getDefaultForm".
   public String getCanonicalForm() {
-    return isMain() ? "" : name;
+    return isMain() ? "" : getNameWithAt();
   }
 
   /**
@@ -250,7 +211,7 @@ public final class RepositoryName {
         siblingRepositoryLayout
             ? LabelConstants.EXPERIMENTAL_EXTERNAL_PATH_PREFIX
             : LabelConstants.EXTERNAL_PATH_PREFIX;
-    return prefix.getRelative(strippedName());
+    return prefix.getRelative(getName());
   }
 
   /**
@@ -260,15 +221,13 @@ public final class RepositoryName {
   public PathFragment getRunfilesPath() {
     return isMain()
         ? PathFragment.EMPTY_FRAGMENT
-        : PathFragment.create("..").getRelative(strippedName());
+        : PathFragment.create("..").getRelative(getName());
   }
 
-  /**
-   * Returns the repository name, with leading "{@literal @}" (or "" for the default repository).
-   */
+  /** Returns the repository name, with leading "{@literal @}". */
   @Override
   public String toString() {
-    return name;
+    return getNameWithAt();
   }
 
   @Override

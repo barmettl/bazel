@@ -175,8 +175,7 @@ public interface JavaCommonApi<
             doc =
                 "A string that specifies how to handle strict deps. Possible values: 'OFF', "
                     + "'ERROR', 'WARN' and 'DEFAULT'. For more details see "
-                    + "https://docs.bazel.build/versions/main/bazel-user-manual.html#"
-                    + "flag--strict_java_deps. By default 'ERROR'."),
+                    + "${link user-manual#flag--strict_java_deps}. By default 'ERROR'."),
         @Param(
             name = "java_toolchain",
             positional = false,
@@ -231,6 +230,18 @@ public interface JavaCommonApi<
                     + " intended for use by non-library targets such as binaries that do not have"
                     + " dependants."),
         @Param(
+            name = "enable_jspecify",
+            positional = false,
+            named = true,
+            defaultValue = "True",
+            documented = false),
+        @Param(
+            name = "include_compilation_info",
+            positional = false,
+            named = true,
+            defaultValue = "True",
+            documented = false),
+        @Param(
             name = "injecting_rule_kind",
             documented = false,
             positional = false,
@@ -240,6 +251,22 @@ public interface JavaCommonApi<
               @ParamType(type = String.class),
               @ParamType(type = NoneType.class),
             }),
+        @Param(
+            name = "add_exports",
+            positional = false,
+            named = true,
+            allowedTypes = {@ParamType(type = Sequence.class, generic1 = String.class)},
+            defaultValue = "[]",
+            doc = "Allow this library to access the given <module>/<package>. Optional."),
+        @Param(
+            name = "add_opens",
+            positional = false,
+            named = true,
+            allowedTypes = {@ParamType(type = Sequence.class, generic1 = String.class)},
+            defaultValue = "[]",
+            doc =
+                "Allow this library to reflectively access the given <module>/<package>."
+                    + " Optional."),
       },
       useStarlarkThread = true)
   JavaInfoT createJavaCompileAction(
@@ -266,7 +293,11 @@ public interface JavaCommonApi<
       Boolean neverlink,
       Boolean enableAnnotationProcessing,
       Boolean enableCompileJarAction,
+      Boolean enableJSpecify,
+      boolean includeCompilationInfo,
       Object injectingRuleKind,
+      Sequence<?> addExports, // <String> expected.
+      Sequence<?> addOpens, // <String> expected.
       StarlarkThread thread)
       throws EvalException, InterruptedException;
 
@@ -445,16 +476,17 @@ public interface JavaCommonApi<
             allowedTypes = {@ParamType(type = Sequence.class, generic1 = JavaInfoApi.class)},
             doc = "The list of providers to merge."),
         @Param(
-            name = "runtime_deps",
-            allowedTypes = {@ParamType(type = Sequence.class, generic1 = JavaInfoApi.class)},
+            name = "merge_java_outputs",
+            positional = false,
             named = true,
-            defaultValue = "[]",
-            doc = "A list of runtime dependencies. Optional."),
+            defaultValue = "True"),
+        @Param(name = "merge_source_jars", positional = false, named = true, defaultValue = "True"),
       },
       useStarlarkThread = true)
   JavaInfoT mergeJavaProviders(
       Sequence<?> providers /* <JavaInfoT> expected. */,
-      Sequence<?> runtimeDeps /* <JavaInfoT> expected. */,
+      boolean mergeJavaOutputs,
+      boolean mergeSourceJars,
       StarlarkThread thread)
       throws EvalException;
 

@@ -35,7 +35,9 @@ import com.google.devtools.build.lib.actions.ActionLookupValue;
 import com.google.devtools.build.lib.actions.Actions;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ArtifactFactory;
+import com.google.devtools.build.lib.actions.BuildFailedException;
 import com.google.devtools.build.lib.actions.PackageRoots;
+import com.google.devtools.build.lib.actions.TestExecException;
 import com.google.devtools.build.lib.actions.TotalAndConfiguredTargetOnlyMetric;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationCollection;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
@@ -48,6 +50,7 @@ import com.google.devtools.build.lib.analysis.constraints.TopLevelConstraintSema
 import com.google.devtools.build.lib.analysis.test.CoverageReportActionFactory;
 import com.google.devtools.build.lib.analysis.test.CoverageReportActionFactory.CoverageReportActionsWrapper;
 import com.google.devtools.build.lib.analysis.test.InstrumentedFilesInfo;
+import com.google.devtools.build.lib.bugreport.BugReporter;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
@@ -195,7 +198,7 @@ public class BuildView {
       TargetPatternPhaseValue loadingResult,
       BuildOptions targetOptions,
       Set<String> multiCpu,
-      ImmutableSet<String> explicitTargetPatterns,
+      ImmutableSet<Label> explicitTargetPatterns,
       List<String> aspects,
       ImmutableMap<String, String> aspectsParameters,
       AnalysisOptions viewOptions,
@@ -206,13 +209,16 @@ public class BuildView {
       boolean reportIncompatibleTargets,
       ExtendedEventHandler eventHandler,
       EventBus eventBus,
+      BugReporter bugReporter,
       boolean includeExecutionPhase,
       int mergedPhasesExecutionJobsCount)
-      throws ViewCreationFailedException, InvalidConfigurationException, InterruptedException {
+      throws ViewCreationFailedException, InvalidConfigurationException, InterruptedException,
+          BuildFailedException, TestExecException {
     logger.atInfo().log("Starting analysis");
     pollInterruptedStatus();
 
     skyframeBuildView.resetProgressReceiver();
+    skyframeExecutor.setBaselineConfiguration(targetOptions);
 
     ImmutableMap.Builder<Label, Target> labelToTargetsMapBuilder =
         ImmutableMap.builderWithExpectedSize(loadingResult.getTargetLabels().size());
@@ -392,6 +398,7 @@ public class BuildView {
                 memoizedConfigurationLookupSupplier,
                 topLevelOptions,
                 eventBus,
+                bugReporter,
                 keepGoing,
                 loadingPhaseThreads,
                 viewOptions.strictConflictChecks,
@@ -399,14 +406,20 @@ public class BuildView {
                 viewOptions.cpuHeavySkyKeysThreadPoolSize);
         setArtifactRoots(skyframeAnalysisResult.getPackageRoots());
       } else {
+        skyframeExecutor.setRuleContextConstraintSemantics(
+            (RuleContextConstraintSemantics) ruleClassProvider.getConstraintSemantics());
         skyframeAnalysisResult =
             skyframeBuildView.analyzeAndExecuteTargets(
                 eventHandler,
                 topLevelCtKeys,
                 aspectsKeys.build(),
+                loadingResult.getTestsToRunLabels(),
+                labelToTargetMap,
                 memoizedConfigurationLookupSupplier,
                 topLevelOptions,
+                explicitTargetPatterns,
                 eventBus,
+                bugReporter,
                 keepGoing,
                 viewOptions.strictConflictChecks,
                 checkForActionConflicts,
@@ -587,7 +600,7 @@ public class BuildView {
           configurations,
           ImmutableSet.copyOf(configuredTargets),
           aspects,
-          allTargetsToTest == null ? null : ImmutableList.copyOf(allTargetsToTest),
+          allTargetsToTest == null ? null : ImmutableSet.copyOf(allTargetsToTest),
           ImmutableSet.copyOf(targetsToSkip),
           failureDetail,
           artifactsToBuild.build(),
@@ -595,8 +608,7 @@ public class BuildView {
           exclusiveTests,
           topLevelOptions,
           loadingResult.getWorkspaceName(),
-          topLevelTargetsWithConfigs.getTargetsAndConfigs(),
-          loadingResult.getNotSymlinkedInExecrootDirectories());
+          topLevelTargetsWithConfigs.getTargetsAndConfigs());
     }
 
 
@@ -630,7 +642,7 @@ public class BuildView {
         configurations,
         ImmutableSet.copyOf(configuredTargets),
         aspects,
-        allTargetsToTest == null ? null : ImmutableList.copyOf(allTargetsToTest),
+        allTargetsToTest == null ? null : ImmutableSet.copyOf(allTargetsToTest),
         ImmutableSet.copyOf(targetsToSkip),
         failureDetail,
         actionGraph,
@@ -640,19 +652,29 @@ public class BuildView {
         topLevelOptions,
         skyframeAnalysisResult.getPackageRoots(),
         loadingResult.getWorkspaceName(),
-        topLevelTargetsWithConfigs.getTargetsAndConfigs(),
-        loadingResult.getNotSymlinkedInExecrootDirectories());
+        topLevelTargetsWithConfigs.getTargetsAndConfigs());
   }
 
   /**
    * Check for errors in "chronological" order (acknowledge that loading and analysis are
    * interleaved, but sequential on the single target scale).
+   *
+   * <p>For Skymeld: execution errors should take precedence, since those are DetailedExceptions.
    */
   @Nullable
   public static FailureDetail createFailureDetail(
       TargetPatternPhaseValue loadingResult,
       @Nullable SkyframeAnalysisResult skyframeAnalysisResult,
       @Nullable TopLevelTargetsAndConfigsResult topLevelTargetsAndConfigs) {
+    if (skyframeAnalysisResult instanceof SkyframeAnalysisAndExecutionResult) {
+      SkyframeAnalysisAndExecutionResult skyframeAnalysisAndExecutionResult =
+          (SkyframeAnalysisAndExecutionResult) skyframeAnalysisResult;
+      if (skyframeAnalysisAndExecutionResult.getRepresentativeExecutionExitCode() != null) {
+        return skyframeAnalysisAndExecutionResult
+            .getRepresentativeExecutionExitCode()
+            .getFailureDetail();
+      }
+    }
     if (loadingResult.hasError()) {
       return FailureDetail.newBuilder()
           .setMessage("command succeeded, but there were errors parsing the target pattern")
@@ -681,15 +703,6 @@ public class BuildView {
           .setMessage("command succeeded, but not all targets were analyzed")
           .setAnalysis(Analysis.newBuilder().setCode(Analysis.Code.NOT_ALL_TARGETS_ANALYZED))
           .build();
-    }
-    if (skyframeAnalysisResult instanceof SkyframeAnalysisAndExecutionResult) {
-      SkyframeAnalysisAndExecutionResult skyframeAnalysisAndExecutionResult =
-          (SkyframeAnalysisAndExecutionResult) skyframeAnalysisResult;
-      if (skyframeAnalysisAndExecutionResult.getRepresentativeExecutionExitCode() != null) {
-        return skyframeAnalysisAndExecutionResult
-            .getRepresentativeExecutionExitCode()
-            .getFailureDetail();
-      }
     }
     return null;
   }

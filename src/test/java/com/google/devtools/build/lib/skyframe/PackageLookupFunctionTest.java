@@ -42,11 +42,13 @@ import com.google.devtools.build.lib.rules.repository.LocalRepositoryRule;
 import com.google.devtools.build.lib.rules.repository.RepositoryDelegatorFunction;
 import com.google.devtools.build.lib.rules.repository.RepositoryFunction;
 import com.google.devtools.build.lib.skyframe.ExternalFilesHelper.ExternalFileAction;
+import com.google.devtools.build.lib.skyframe.PackageFunction.GlobbingStrategy;
 import com.google.devtools.build.lib.skyframe.PackageLookupFunction.CrossRepositoryLabelViolationStrategy;
 import com.google.devtools.build.lib.skyframe.PackageLookupValue.ErrorReason;
 import com.google.devtools.build.lib.skyframe.PackageLookupValue.IncorrectRepositoryReferencePackageLookupValue;
 import com.google.devtools.build.lib.testutil.FoundationTestCase;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
+import com.google.devtools.build.lib.vfs.FileStateKey;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Root;
@@ -127,19 +129,19 @@ public abstract class PackageLookupFunctionTest extends FoundationTestCase {
             null,
             /*packageProgress=*/ null,
             PackageFunction.ActionOnIOExceptionReadingBuildFile.UseOriginalIOException.INSTANCE,
-            PackageFunction.IncrementalityIntent.INCREMENTAL,
+            GlobbingStrategy.SKYFRAME_HYBRID,
             k -> ThreadStateReceiver.NULL_INSTANCE));
     skyFunctions.put(
-        FileStateValue.FILE_STATE,
+        FileStateKey.FILE_STATE,
         new FileStateFunction(
             Suppliers.ofInstance(new TimestampGranularityMonitor(BlazeClock.instance())),
-            () -> SyscallCache.NO_CACHE,
+            SyscallCache.NO_CACHE,
             externalFilesHelper));
-    skyFunctions.put(FileValue.FILE, new FileFunction(pkgLocator));
+    skyFunctions.put(FileValue.FILE, new FileFunction(pkgLocator, directories));
     skyFunctions.put(SkyFunctions.DIRECTORY_LISTING, new DirectoryListingFunction());
     skyFunctions.put(
         SkyFunctions.DIRECTORY_LISTING_STATE,
-        new DirectoryListingStateFunction(externalFilesHelper, () -> SyscallCache.NO_CACHE));
+        new DirectoryListingStateFunction(externalFilesHelper, SyscallCache.NO_CACHE));
     skyFunctions.put(
         SkyFunctions.IGNORED_PACKAGE_PREFIXES,
         new IgnoredPackagePrefixesFunction(
@@ -375,7 +377,7 @@ public abstract class PackageLookupFunctionTest extends FoundationTestCase {
 
     // First, use the correct label.
     PackageLookupValue packageLookupValue =
-        lookupPackage(PackageIdentifier.create("@local", PathFragment.EMPTY_FRAGMENT));
+        lookupPackage(PackageIdentifier.create("local", PathFragment.EMPTY_FRAGMENT));
     assertThat(packageLookupValue.packageExists()).isTrue();
 
     // Then, use the incorrect label.

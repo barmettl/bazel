@@ -156,7 +156,7 @@ public abstract class AndroidBinaryTest extends AndroidBuildViewTestCase {
           ")",
           "config_setting(",
           "    name = 'is_arm',",
-          "    constraint_values = ['" + TestConstants.CONSTRAINTS_PACKAGE_ROOT + "cpu:arm'],",
+          "    constraint_values = ['" + TestConstants.CONSTRAINTS_PACKAGE_ROOT + "cpu:armv7'],",
           ")",
           "android_library(",
           "    name = 'lib',",
@@ -223,7 +223,7 @@ public abstract class AndroidBinaryTest extends AndroidBuildViewTestCase {
           "platform(",
           "    name = 'armeabi-v7a',",
           "    parents = ['" + TestConstants.PLATFORM_PACKAGE_ROOT + "/android:armeabi-v7a'],",
-          "    constraint_values = ['" + TestConstants.CONSTRAINTS_PACKAGE_ROOT + "cpu:arm'],",
+          "    constraint_values = ['" + TestConstants.CONSTRAINTS_PACKAGE_ROOT + "cpu:armv7'],",
           ")");
       scratch.file(
           "/workspace/platform_mappings",
@@ -239,7 +239,7 @@ public abstract class AndroidBinaryTest extends AndroidBuildViewTestCase {
           "flags:",
           "  --crosstool_top=//android/crosstool:everything",
           "  --cpu=armeabi-v7a",
-          "    //java/android/platforms:arm",
+          "    //java/android/platforms:armv7",
           "  --crosstool_top=//android/crosstool:everything",
           "  --cpu=x86",
           "    //java/android/platforms:x86");
@@ -696,6 +696,94 @@ public abstract class AndroidBinaryTest extends AndroidBuildViewTestCase {
     assertThat(found).isEqualTo(2 /* signed and unsigned apks */);
   }
 
+  @Test
+  public void testSimpleBinary_dexNoMinSdkVersion() throws Exception {
+    scratch.overwriteFile(
+        "java/android/BUILD",
+        "android_binary(name = 'app',",
+        "               srcs = ['A.java'],",
+        "               manifest = 'AndroidManifest.xml',",
+        "               resource_files = glob(['res/**']),",
+        "               multidex = 'legacy',",
+        "              )");
+    useConfiguration("--experimental_desugar_java8_libs");
+    ConfiguredTarget binary = getConfiguredTarget("//java/android:app");
+
+    List<String> args =
+        getGeneratingSpawnActionArgs(
+            ActionsTestUtil.getFirstArtifactEndingWith(
+                actionsTestUtil().artifactClosureOf(getFilesToBuild(binary)),
+                "/libapp.jar.dex.zip"));
+    assertThat(args).doesNotContain("--min_sdk_version");
+  }
+
+  @Test
+  public void testSimpleBinary_dexMinSdkVersion() throws Exception {
+    scratch.overwriteFile(
+        "java/android/BUILD",
+        "android_binary(name = 'app',",
+        "               srcs = ['A.java'],",
+        "               manifest = 'AndroidManifest.xml',",
+        "               resource_files = glob(['res/**']),",
+        "               min_sdk_version = 28,",
+        "               multidex = 'legacy',",
+        "              )");
+    useConfiguration("--experimental_desugar_java8_libs");
+    ConfiguredTarget binary = getConfiguredTarget("//java/android:app");
+
+    List<String> args =
+        getGeneratingSpawnActionArgs(
+            ActionsTestUtil.getFirstArtifactEndingWith(
+                actionsTestUtil().artifactClosureOf(getFilesToBuild(binary)),
+                "/libapp.jar.dex.zip"));
+    assertThat(args).contains("--min_sdk_version");
+    assertThat(args).contains("28");
+  }
+
+  @Test
+  public void testSimpleBinary_desugarNoMinSdkVersion() throws Exception {
+    scratch.overwriteFile(
+        "java/android/BUILD",
+        "android_binary(name = 'app',",
+        "               srcs = ['A.java'],",
+        "               manifest = 'AndroidManifest.xml',",
+        "               resource_files = glob(['res/**']),",
+        "               multidex = 'legacy',",
+        "              )");
+    useConfiguration("--experimental_desugar_java8_libs");
+    ConfiguredTarget binary = getConfiguredTarget("//java/android:app");
+
+    List<String> args =
+        getGeneratingSpawnActionArgs(
+            ActionsTestUtil.getFirstArtifactEndingWith(
+                actionsTestUtil().artifactClosureOf(getFilesToBuild(binary)),
+                "/libapp.jar_desugared.jar"));
+    assertThat(args).doesNotContain("--min_sdk_version");
+  }
+
+  @Test
+  public void testSimpleBinary_desugarMinSdkVersion() throws Exception {
+    scratch.overwriteFile(
+        "java/android/BUILD",
+        "android_binary(name = 'app',",
+        "               srcs = ['A.java'],",
+        "               manifest = 'AndroidManifest.xml',",
+        "               resource_files = glob(['res/**']),",
+        "               min_sdk_version = 28,",
+        "               multidex = 'legacy',",
+        "              )");
+    useConfiguration("--experimental_desugar_java8_libs");
+    ConfiguredTarget binary = getConfiguredTarget("//java/android:app");
+
+    List<String> args =
+        getGeneratingSpawnActionArgs(
+            ActionsTestUtil.getFirstArtifactEndingWith(
+                actionsTestUtil().artifactClosureOf(getFilesToBuild(binary)),
+                "/libapp.jar_desugared.jar"));
+    assertThat(args).contains("--min_sdk_version");
+    assertThat(args).contains("28");
+  }
+
   // regression test for #3169099
   @Test
   public void testBinarySrcs() throws Exception {
@@ -803,6 +891,7 @@ public abstract class AndroidBinaryTest extends AndroidBuildViewTestCase {
 
   @Test
   public void testNativeLibrary_copiesLibrariesDespiteExtraLayersOfIndirection() throws Exception {
+    setBuildLanguageOptions("--experimental_builtins_injection_override=+cc_library");
     scratch.file(
         "java/android/app/BUILD",
         "cc_library(name = 'native_dep',",
@@ -2278,6 +2367,9 @@ public abstract class AndroidBinaryTest extends AndroidBuildViewTestCase {
     assertThat(deployInfo.getMergedManifest().getExecRootPath()).endsWith("/AndroidManifest.xml");
     assertThat(deployInfo.getAdditionalMergedManifestsList()).isEmpty();
     assertThat(deployInfo.getApksToDeploy(0).getExecRootPath()).endsWith("/app.apk");
+    Artifact mergedManifest =
+        ActionsTestUtil.getFirstArtifactEndingWith(outputGroup, "/AndroidManifest.xml");
+    assertThat(mergedManifest).isNotNull();
   }
 
   /**

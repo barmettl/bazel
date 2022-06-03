@@ -18,6 +18,7 @@ import com.google.devtools.build.lib.starlarkbuildapi.FileApi;
 import com.google.devtools.build.lib.starlarkbuildapi.StarlarkRuleContextApi;
 import com.google.devtools.build.lib.starlarkbuildapi.core.TransitiveInfoCollectionApi;
 import com.google.devtools.build.lib.starlarkbuildapi.platform.ConstraintValueInfoApi;
+import javax.annotation.Nullable;
 import net.starlark.java.annot.Param;
 import net.starlark.java.annot.StarlarkBuiltin;
 import net.starlark.java.annot.StarlarkMethod;
@@ -68,23 +69,14 @@ public interface JavaProtoCommonApi<
   boolean hasProtoSources(TransitiveInfoCollectionT target);
 
   @StarlarkMethod(
-      name = "toolchain_deps",
-      // This function is experimental for now.
-      documented = false,
-      parameters = {
-        @Param(name = "ctx", positional = true, named = false, doc = "The rule context."),
-        @Param(name = "proto_toolchain_attr", positional = false, named = true)
-      })
-  JavaInfoApi<FileT, ?, ?> getRuntimeToolchainProvider(
-      StarlarkRuleContextT starlarkRuleContext, String protoToolchainAttr) throws EvalException;
-
-  @StarlarkMethod(
       name = "get_runtime",
+      allowReturnNones = true,
       documented = false,
       parameters = {
         @Param(name = "ctx", positional = true, named = false, doc = "The rule context."),
         @Param(name = "proto_toolchain_attr", positional = false, named = true)
       })
+  @Nullable
   TransitiveInfoCollectionApi getRuntime(
       StarlarkRuleContextT starlarkRuleContext, String protoToolchainAttr) throws EvalException;
 }

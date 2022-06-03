@@ -14,7 +14,6 @@
 package com.google.devtools.build.lib.rules.java;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
-import static com.google.devtools.build.lib.rules.java.JavaCompilationArgsProvider.ClasspathType.RUNTIME_ONLY;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
@@ -29,7 +28,6 @@ import com.google.devtools.build.lib.analysis.TransitiveInfoProviderMapBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Depset;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
-import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.packages.BuiltinProvider;
 import com.google.devtools.build.lib.packages.NativeInfo;
@@ -40,6 +38,7 @@ import com.google.devtools.build.lib.rules.java.JavaRuleOutputJarsProvider.JavaO
 import com.google.devtools.build.lib.starlarkbuildapi.FileApi;
 import com.google.devtools.build.lib.starlarkbuildapi.cpp.CcInfoApi;
 import com.google.devtools.build.lib.starlarkbuildapi.java.JavaInfoApi;
+import com.google.devtools.build.lib.starlarkbuildapi.java.JavaModuleFlagsProviderApi;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -77,7 +76,8 @@ public final class JavaInfo extends NativeInfo
           JavaRuleOutputJarsProvider.class,
           JavaGenJarsProvider.class,
           JavaCompilationInfoProvider.class,
-          JavaCcInfoProvider.class);
+          JavaCcInfoProvider.class,
+          JavaModuleFlagsProvider.class);
 
   private final TransitiveInfoProviderMap providers;
 
@@ -91,16 +91,6 @@ public final class JavaInfo extends NativeInfo
    * for Proguarding (the compile time classpath is not enough because that contains only ijars)
    */
   private final ImmutableList<Artifact> directRuntimeJars;
-
-  /**
-   * A set of runtime jars corresponding to the transitive dependencies of a certain target,
-   * excluding the runtime jars for the target itself and its direct dependencies.
-   *
-   * <p>This set is required only when the persistent test runner is enabled. It is used to create a
-   * custom classloader for loading the jars in the transitive dependencies. The persistent test
-   * runner creates a separate classloader for the target itself and its direct dependencies.
-   */
-  private final NestedSet<Artifact> transitiveOnlyRuntimeJars;
 
   /** Java constraints (e.g. "android") that are present on the target. */
   private final ImmutableList<String> javaConstraints;
@@ -118,66 +108,56 @@ public final class JavaInfo extends NativeInfo
   }
 
   /**
-   * Merges the given providers and runtime dependencies into one {@link JavaInfo}. All the
-   * providers with the same type in the given list are merged into one provider that is added to
-   * the resulting {@link JavaInfo}.
+   * Merges the given providers into one {@link JavaInfo}. All the providers with the same type in
+   * the given list are merged into one provider that is added to the resulting {@link JavaInfo}.
    */
-  public static JavaInfo merge(List<JavaInfo> providers, List<JavaInfo> runtimeDeps) {
-    JavaCompilationArgsProvider.Builder javaCompilationArgsBuilder =
-        JavaCompilationArgsProvider.builder();
-    JavaInfo.fetchProvidersFromList(providers, JavaCompilationArgsProvider.class)
-        .forEach(javaCompilationArgsBuilder::addExports);
-    streamProviders(runtimeDeps, JavaCompilationArgsProvider.class)
-        .forEach(args -> javaCompilationArgsBuilder.addDeps(args, RUNTIME_ONLY));
+  public static JavaInfo merge(
+      List<JavaInfo> providers, boolean mergeJavaOutputs, boolean mergeSourceJars) {
+    ImmutableList<JavaCompilationArgsProvider> javaCompilationArgsProviders =
+        JavaInfo.fetchProvidersFromList(providers, JavaCompilationArgsProvider.class);
 
-    JavaSourceJarsProvider.Builder javaSourceJarsBuilder = JavaSourceJarsProvider.builder();
-    JavaInfo.fetchProvidersFromList(providers, JavaSourceJarsProvider.class)
-        .forEach(javaSourceJarsBuilder::mergeFrom);
-    // If transitive source jar doesn't include sourcejar at this level but they should.
-    NestedSetBuilder<Artifact> transitiveSourceJars = NestedSetBuilder.stableOrder();
-    streamProviders(runtimeDeps, JavaSourceJarsProvider.class)
-        .forEach(
-            dep -> {
-              transitiveSourceJars.addAll(dep.getSourceJars());
-              transitiveSourceJars.addTransitive(dep.getTransitiveSourceJars());
-            });
-    javaSourceJarsBuilder.addAllTransitiveSourceJars(transitiveSourceJars.build());
+    final ImmutableList<JavaSourceJarsProvider> javaSourceJarsProviders =
+        mergeSourceJars
+            ? JavaInfo.fetchProvidersFromList(providers, JavaSourceJarsProvider.class)
+            : ImmutableList.of();
+    final ImmutableList<JavaRuleOutputJarsProvider> javaRuleOutputJarsProviders =
+        mergeJavaOutputs
+            ? JavaInfo.fetchProvidersFromList(providers, JavaRuleOutputJarsProvider.class)
+            : ImmutableList.of();
 
-    List<JavaPluginInfo> javaPluginInfos =
+    ImmutableList<JavaPluginInfo> javaPluginInfos =
         providers.stream()
             .map(JavaInfo::getJavaPluginInfo)
             .filter(Objects::nonNull)
             .collect(toImmutableList());
+    ImmutableList<JavaCcInfoProvider> javaCcInfoProviders =
+        JavaInfo.fetchProvidersFromList(providers, JavaCcInfoProvider.class);
 
-    List<JavaRuleOutputJarsProvider> javaRuleOutputJarsProviders =
-        JavaInfo.fetchProvidersFromList(providers, JavaRuleOutputJarsProvider.class);
-
-    ImmutableList.Builder<JavaCcInfoProvider> javaCcInfoBuilder = ImmutableList.builder();
-    javaCcInfoBuilder.addAll(JavaInfo.fetchProvidersFromList(providers, JavaCcInfoProvider.class));
-    javaCcInfoBuilder.addAll(
-        JavaInfo.fetchProvidersFromList(runtimeDeps, JavaCcInfoProvider.class));
-
-    ImmutableList.Builder<Artifact> runtimeJars = ImmutableList.builder();
-    ImmutableList.Builder<String> javaConstraints = ImmutableList.builder();
+    NestedSetBuilder<Artifact> runtimeJars = NestedSetBuilder.stableOrder();
+    NestedSetBuilder<String> javaConstraints = NestedSetBuilder.stableOrder();
     for (JavaInfo javaInfo : providers) {
-      runtimeJars.addAll(javaInfo.getDirectRuntimeJars());
+      if (mergeJavaOutputs) {
+        runtimeJars.addAll(javaInfo.getDirectRuntimeJars());
+      }
       javaConstraints.addAll(javaInfo.getJavaConstraints());
     }
 
     JavaInfo.Builder javaInfoBuilder =
         JavaInfo.Builder.create()
-            .addProvider(JavaCompilationArgsProvider.class, javaCompilationArgsBuilder.build())
-            .addProvider(JavaSourceJarsProvider.class, javaSourceJarsBuilder.build())
+            .addProvider(
+                JavaCompilationArgsProvider.class,
+                JavaCompilationArgsProvider.merge(javaCompilationArgsProviders))
+            .addProvider(
+                JavaSourceJarsProvider.class, JavaSourceJarsProvider.merge(javaSourceJarsProviders))
             .addProvider(
                 JavaRuleOutputJarsProvider.class,
                 JavaRuleOutputJarsProvider.merge(javaRuleOutputJarsProviders))
             .javaPluginInfo(JavaPluginInfo.mergeWithoutJavaOutputs(javaPluginInfos))
-            .addProvider(
-                JavaCcInfoProvider.class, JavaCcInfoProvider.merge(javaCcInfoBuilder.build()))
+            .addProvider(JavaCcInfoProvider.class, JavaCcInfoProvider.merge(javaCcInfoProviders))
             // TODO(b/65618333): add merge function to JavaGenJarsProvider. See #3769
             // TODO(iirina): merge or remove JavaCompilationInfoProvider
-            .setRuntimeJars(runtimeJars.build())
-            .setJavaConstraints(javaConstraints.build());
+            .setRuntimeJars(runtimeJars.build().toList())
+            .setJavaConstraints(javaConstraints.build().toList());
 
     return javaInfoBuilder.build();
   }
@@ -206,6 +186,7 @@ public final class JavaInfo extends NativeInfo
   /** Returns the instance for the provided providerClass, or <tt>null</tt> if not present. */
   // TODO(adonovan): rename these three overloads of getProvider to avoid
   // confusion with the unrelated no-arg Info.getProvider method.
+  @SuppressWarnings("UngroupedOverloads")
   @Nullable
   public <P extends TransitiveInfoProvider> P getProvider(Class<P> providerClass) {
     return providers.getProvider(providerClass);
@@ -265,13 +246,11 @@ public final class JavaInfo extends NativeInfo
   private JavaInfo(
       TransitiveInfoProviderMap providers,
       ImmutableList<Artifact> directRuntimeJars,
-      NestedSet<Artifact> transitiveOnlyRuntimeJars,
       boolean neverlink,
       ImmutableList<String> javaConstraints,
       Location creationLocation) {
     super(creationLocation);
     this.directRuntimeJars = directRuntimeJars;
-    this.transitiveOnlyRuntimeJars = transitiveOnlyRuntimeJars;
     this.providers = providers;
     this.neverlink = neverlink;
     this.javaConstraints = javaConstraints;
@@ -354,11 +333,6 @@ public final class JavaInfo extends NativeInfo
     return directRuntimeJars;
   }
 
-  // Do not expose to Starlark.
-  public NestedSet<Artifact> getTransitiveOnlyRuntimeJars() {
-    return transitiveOnlyRuntimeJars;
-  }
-
   @Override
   public Depset /*<Artifact>*/ getTransitiveDeps() {
     return Depset.of(
@@ -400,6 +374,14 @@ public final class JavaInfo extends NativeInfo
   public CcInfoApi<Artifact> getCcLinkParamInfo() {
     JavaCcInfoProvider javaCcInfoProvider = getProvider(JavaCcInfoProvider.class);
     return javaCcInfoProvider != null ? javaCcInfoProvider.getCcInfo() : CcInfo.EMPTY;
+  }
+
+  @Override
+  public JavaModuleFlagsProviderApi getJavaModuleFlagsInfo() {
+    JavaModuleFlagsProvider javaModuleFlagsProvider = getProvider(JavaModuleFlagsProvider.class);
+    return javaModuleFlagsProvider == null
+        ? JavaModuleFlagsProvider.EMPTY
+        : javaModuleFlagsProvider;
   }
 
   @Override
@@ -524,8 +506,6 @@ public final class JavaInfo extends NativeInfo
     TransitiveInfoProviderMapBuilder providerMap;
     private ImmutableList<Artifact> runtimeJars;
     private ImmutableList<String> javaConstraints;
-    private final NestedSetBuilder<Artifact> transitiveOnlyRuntimeJars =
-        new NestedSetBuilder<>(Order.STABLE_ORDER);
     private boolean neverlink;
     private Location creationLocation = Location.BUILTIN;
 
@@ -542,7 +522,6 @@ public final class JavaInfo extends NativeInfo
     public static Builder copyOf(JavaInfo javaInfo) {
       return new Builder(new TransitiveInfoProviderMapBuilder().addAll(javaInfo.getProviders()))
           .setRuntimeJars(javaInfo.getDirectRuntimeJars())
-          .addTransitiveOnlyRuntimeJars(javaInfo.getTransitiveOnlyRuntimeJars())
           .setNeverlink(javaInfo.isNeverlink())
           .setJavaConstraints(javaInfo.getJavaConstraints())
           .setLocation(javaInfo.getCreationLocation());
@@ -555,29 +534,6 @@ public final class JavaInfo extends NativeInfo
 
     public Builder setNeverlink(boolean neverlink) {
       this.neverlink = neverlink;
-      return this;
-    }
-
-    public Builder addTransitiveOnlyRuntimeJars(List<? extends TransitiveInfoCollection> deps) {
-      addTransitiveOnlyRuntimeJarsToJavaInfo(
-          deps.stream()
-              .map(JavaInfo::getJavaInfo)
-              .filter(Objects::nonNull)
-              .collect(toImmutableList()));
-      return this;
-    }
-
-    public Builder addTransitiveOnlyRuntimeJarsToJavaInfo(List<JavaInfo> deps) {
-      deps.stream()
-          .map(j -> j.getProvider(JavaCompilationArgsProvider.class))
-          .filter(Objects::nonNull)
-          .map(JavaCompilationArgsProvider::getRuntimeJars)
-          .forEach(this::addTransitiveOnlyRuntimeJars);
-      return this;
-    }
-
-    Builder addTransitiveOnlyRuntimeJars(NestedSet<Artifact> runtimeJars) {
-      this.transitiveOnlyRuntimeJars.addTransitive(runtimeJars);
       return this;
     }
 
@@ -607,7 +563,6 @@ public final class JavaInfo extends NativeInfo
       return new JavaInfo(
           providerMap.build(),
           runtimeJars,
-          transitiveOnlyRuntimeJars.build(),
           neverlink,
           javaConstraints,
           creationLocation);

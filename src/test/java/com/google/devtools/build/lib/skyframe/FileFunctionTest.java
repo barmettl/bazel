@@ -57,6 +57,7 @@ import com.google.devtools.build.lib.rules.repository.LocalRepositoryRule;
 import com.google.devtools.build.lib.rules.repository.RepositoryDelegatorFunction;
 import com.google.devtools.build.lib.rules.repository.RepositoryFunction;
 import com.google.devtools.build.lib.skyframe.ExternalFilesHelper.ExternalFileAction;
+import com.google.devtools.build.lib.skyframe.PackageFunction.GlobbingStrategy;
 import com.google.devtools.build.lib.skyframe.PackageLookupFunction.CrossRepositoryLabelViolationStrategy;
 import com.google.devtools.build.lib.skyframe.serialization.testutils.FsUtils;
 import com.google.devtools.build.lib.skyframe.serialization.testutils.SerializationTester;
@@ -68,6 +69,7 @@ import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
 import com.google.devtools.build.lib.vfs.DigestHashFunction;
 import com.google.devtools.build.lib.vfs.FileAccessException;
+import com.google.devtools.build.lib.vfs.FileStateKey;
 import com.google.devtools.build.lib.vfs.FileStatus;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
@@ -119,6 +121,7 @@ public class FileFunctionTest {
   private InMemoryFileSystem fs;
   private Root pkgRoot;
   private Path outputBase;
+  private Root outputBaseRoot;
   private PathPackageLocator pkgLocator;
   private boolean fastDigest;
   private ManualClock manualClock;
@@ -135,6 +138,7 @@ public class FileFunctionTest {
     this.fs = fs;
     pkgRoot = Root.fromPath(fs.getPath("/root"));
     outputBase = fs.getPath("/output_base");
+    outputBaseRoot = Root.fromPath(outputBase);
     pkgLocator =
         new PathPackageLocator(
             outputBase,
@@ -166,11 +170,11 @@ public class FileFunctionTest {
         new InMemoryMemoizingEvaluator(
             ImmutableMap.<SkyFunctionName, SkyFunction>builder()
                 .put(
-                    FileStateValue.FILE_STATE,
+                    FileStateKey.FILE_STATE,
                     new FileStateFunction(
                         Suppliers.ofInstance(
                             new TimestampGranularityMonitor(BlazeClock.instance())),
-                        () -> SyscallCache.NO_CACHE,
+                        SyscallCache.NO_CACHE,
                         externalFilesHelper))
                 .put(
                     FileSymlinkCycleUniquenessFunction.NAME,
@@ -178,7 +182,7 @@ public class FileFunctionTest {
                 .put(
                     FileSymlinkInfiniteExpansionUniquenessFunction.NAME,
                     new FileSymlinkInfiniteExpansionUniquenessFunction())
-                .put(FileValue.FILE, new FileFunction(pkgLocatorRef))
+                .put(FileValue.FILE, new FileFunction(pkgLocatorRef, directories))
                 .put(
                     SkyFunctions.PACKAGE,
                     new PackageFunction(
@@ -190,7 +194,7 @@ public class FileFunctionTest {
                         /*packageProgress=*/ null,
                         PackageFunction.ActionOnIOExceptionReadingBuildFile.UseOriginalIOException
                             .INSTANCE,
-                        PackageFunction.IncrementalityIntent.INCREMENTAL,
+                        GlobbingStrategy.SKYFRAME_HYBRID,
                         k -> ThreadStateReceiver.NULL_INSTANCE))
                 .put(
                     SkyFunctions.PACKAGE_LOOKUP,
@@ -439,18 +443,16 @@ public class FileFunctionTest {
     seenFiles.addAll(getFilesSeenAndAssertValueChangesIfContentsOfFileChanges("b", false, "a"));
     seenFiles.addAll(
         getFilesSeenAndAssertValueChangesIfContentsOfFileChanges(externalPath, true, "a"));
-    Root root = Root.absoluteRoot(fs);
     assertThat(seenFiles)
         .containsExactly(
             rootedPath("WORKSPACE"),
             rootedPath("WORKSPACE.bazel"),
             rootedPath("a"),
             rootedPath(""),
-            RootedPath.toRootedPath(root, PathFragment.create("/")),
-            RootedPath.toRootedPath(root, PathFragment.create("/output_base")),
-            RootedPath.toRootedPath(root, PathFragment.create("/output_base/external")),
-            RootedPath.toRootedPath(root, PathFragment.create("/output_base/external/a")),
-            RootedPath.toRootedPath(root, PathFragment.create("/output_base/external/a/b")));
+            rootedPath("/output_base"),
+            rootedPath("/output_base/external"),
+            rootedPath("/output_base/external/a"),
+            rootedPath("/output_base/external/a/b"));
   }
 
   @Test
@@ -852,7 +854,7 @@ public class FileFunctionTest {
 
   private static Set<RootedPath> filesSeen(MemoizingEvaluator graph) {
     return graph.getValues().keySet().stream()
-        .filter(SkyFunctionName.functionIs(FileStateValue.FILE_STATE))
+        .filter(SkyFunctionName.functionIs(FileStateKey.FILE_STATE))
         .map(SkyKey::argument)
         .map(RootedPath.class::cast)
         .collect(toImmutableSet());
@@ -1347,6 +1349,7 @@ public class FileFunctionTest {
         fileStateSkyKey("foo"),
         FileStateValue.create(
             RootedPath.toRootedPath(pkgRoot, foo),
+            SyscallCache.NO_CACHE,
             new TimestampGranularityMonitor(BlazeClock.instance())));
     result = evaluator.evaluate(ImmutableList.of(fooKey), evaluationContext);
     assertThatEvaluationResult(result).hasNoError();
@@ -1772,13 +1775,12 @@ public class FileFunctionTest {
   }
 
   private RootedPath rootedPath(String pathString) {
-    Path path = path(pathString);
-    for (Root root : pkgLocator.getPathEntries()) {
-      if (root.contains(path)) {
-        return RootedPath.toRootedPath(root, path);
-      }
-    }
-    return RootedPath.toRootedPath(Root.absoluteRoot(fs), path);
+    ImmutableList<Root> roots =
+        ImmutableList.<Root>builder()
+            .addAll(pkgLocator.getPathEntries())
+            .add(outputBaseRoot)
+            .build();
+    return RootedPath.toRootedPathMaybeUnderRoot(path(pathString), roots);
   }
 
   private SkyKey skyKey(String pathString) {
