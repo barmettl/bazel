@@ -497,6 +497,24 @@ def Main():
   else:
     cov_tool = None
 
+  import tempfile
+  import pathlib
+  user_base = (pathlib.Path(__file__).parent/'.tmp').resolve()
+  user_base.mkdir(parents=True, exist_ok=True)
+
+  pth_dir = user_base / 'lib'/'python3.9'/'site-packages'
+  pth_dir.mkdir(parents=True, exist_ok=True)
+
+  pth_file = str(pth_dir/'packages.pth')
+  path_list = new_env['PYTHONPATH'].split(os.pathsep)
+  with open(pth_file, 'w') as f:
+      for path in path_list:
+          path = path.replace("\\", "/").replace("/", os.path.sep)
+          f.write('{}\n'.format(path))
+  # clean PYTHONPATH and set site.PYTHONUSERBASE variable
+  del new_env['PYTHONPATH'] 
+  new_env['PYTHONUSERBASE'] = str(user_base)
+
   new_env.update((key, val) for key, val in os.environ.items() if key not in new_env)
 
   workspace = None
