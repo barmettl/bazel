@@ -426,7 +426,7 @@ def PythonpathToUsersite(env, python_binary):
         check=True,
         capture_output=True,
         text=True,
-        env={"PYTHONUSERBASE": user_base},
+        env={**os.environ,**{"PYTHONUSERBASE": user_base}}
     ).stdout.strip("\n")
 
     path_list = new_env.pop("PYTHONPATH", "").split(os.pathsep)
