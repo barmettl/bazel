@@ -408,6 +408,37 @@ relative_files = True
     UnresolveSymlinks(output_filename)
   return ret_code
 
+def PythonpathToUsersite(env, python_binary):
+    import sys
+    import subprocess
+    import tempfile
+    import os
+
+    if not (sys.version_info.major >= 3 and sys.version_info.minor >= 7):
+        return env
+
+    import copy
+
+    new_env = copy.copy(env)
+    user_base = tempfile.TemporaryDirectory().name
+    user_site = subprocess.run(
+        [python_binary, "-m", "site", "--user-site"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={"PYTHONUSERBASE": user_base},
+    ).stdout.strip("\n")
+
+    path_list = new_env.pop("PYTHONPATH", "").split(os.pathsep)
+    if not os.path.exists(user_site):
+        os.makedirs(user_site, exist_ok=True)
+    with open(f"{user_site}{os.sep}packages.pth", "w") as f:
+        for path in path_list:
+            path = path.replace("\\", "/").replace("/", os.path.sep)
+            f.write("{}\n".format(path))
+    new_env["PYTHONUSERBASE"] = str(user_base)
+    return new_env
+
 def Main():
   args = sys.argv[1:]
 
@@ -497,24 +528,7 @@ def Main():
   else:
     cov_tool = None
 
-  import tempfile
-  import pathlib
-  user_base = (pathlib.Path(__file__).parent/'.tmp').resolve()
-  user_base.mkdir(parents=True, exist_ok=True)
-
-  pth_dir = user_base / 'lib'/'python3.9'/'site-packages'
-  pth_dir.mkdir(parents=True, exist_ok=True)
-
-  pth_file = str(pth_dir/'packages.pth')
-  path_list = new_env['PYTHONPATH'].split(os.pathsep)
-  with open(pth_file, 'w') as f:
-      for path in path_list:
-          path = path.replace("\\", "/").replace("/", os.path.sep)
-          f.write('{}\n'.format(path))
-  # clean PYTHONPATH and set site.PYTHONUSERBASE variable
-  del new_env['PYTHONPATH'] 
-  new_env['PYTHONUSERBASE'] = str(user_base)
-
+  new_env = PythonpathToUsersite(new_env,python_program)
   new_env.update((key, val) for key, val in os.environ.items() if key not in new_env)
 
   workspace = None
