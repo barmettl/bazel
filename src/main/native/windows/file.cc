@@ -168,6 +168,7 @@ typedef struct _REPARSE_DATA_BUFFER {
 
 int CreateJunction(const wstring& junction_name, const wstring& junction_target,
                    wstring* error) {
+  return CreateSymlink(junction_name,junction_target,error);
   if (!IsAbsoluteNormalizedWindowsPath(junction_name)) {
     if (error) {
       *error = MakeErrorMessage(
