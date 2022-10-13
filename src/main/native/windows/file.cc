@@ -456,17 +456,16 @@ int CreateSymlink(const wstring& symlink_name, const wstring& symlink_target,
   const wstring target = AddUncPrefixMaybe(symlink_target);
 
   DWORD attrs = GetFileAttributesW(target.c_str());
-  if (attrs & FILE_ATTRIBUTE_DIRECTORY) {
-    // Instead of creating a symlink to a directory use a Junction.
-    return CreateSymlinkResult::kTargetIsDirectory;
-  }
+  
+  DWORD isDirectory = attrs & FILE_ATTRIBUTE_DIRECTORY ? SYMBOLIC_LINK_FLAG_DIRECTORY : SYMBOLIC_LINK_FLAG_FILE;
+  DWORD dwFlags = symlinkPrivilegeFlag | isDirectory;
 
   if (!CreateSymbolicLinkW(name.c_str(), target.c_str(),
-                           symlinkPrivilegeFlag)) {
+                           dwFlags)) {
     if (GetLastError() == ERROR_INVALID_PARAMETER) {
-      // We are on a version of Windows that does not support this flag.
+      // We are on a version of Windows that does not support this (symlinkPrivilegeFlag?) flag.
       // Retry without the flag and return to error handling if necessary.
-      if (CreateSymbolicLinkW(name.c_str(), target.c_str(), 0)) {
+      if (CreateSymbolicLinkW(name.c_str(), target.c_str(), isDirectory)) {
         return CreateSymlinkResult::kSuccess;
       }
     }
