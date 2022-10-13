@@ -66,8 +66,8 @@ static const size_t kWindowsPathBufferSize = 0x8010;
 
 using bazel::windows::AutoAttributeList;
 using bazel::windows::AutoHandle;
-using bazel::windows::CreateJunction;
-using bazel::windows::CreateJunctionResult;
+using bazel::windows::CreateSymlink;
+using bazel::windows::CreateSymlinkResult;
 
 // TODO(bazel-team): stop using BAZEL_DIE, handle errors on the caller side.
 // BAZEL_DIE calls exit(exitcode), which makes it difficult to follow the
@@ -814,12 +814,12 @@ bool SymlinkDirectories(const string& posix_target,
     return false;
   }
   wstring werror;
-  if (CreateJunction(name.AsNativePath(), target, &werror) !=
-      CreateJunctionResult::kSuccess) {
+  if (CreateSymlink(name.AsNativePath(), target, &werror) !=
+      CreateSymlinkResult::kSuccess) {
     string error(blaze_util::WstringToCstring(werror));
     BAZEL_LOG(ERROR) << "SymlinkDirectories(" << posix_target << ", "
                      << name.AsPrintablePath()
-                     << "): CreateJunction: " << error;
+                     << "): CreateSymlink: " << error;
     return false;
   }
   return true;
